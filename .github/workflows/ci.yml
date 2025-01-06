@@ -93,14 +93,14 @@ jobs:
             link-flags: '-Dmsvcrt_dynamic -Dskip_executables'
             post-build: ''
             target-postfix: '_Dynamic'
-    runs-on: windows-latest
+    runs-on: github-windows-11-aarch64-4
     steps:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Setup Zig
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://pkg.machengine.org/zig/zig-windows-x86_64-0.14.0-dev.2577+271452d22.zip" -OutFile "C:\zig.zip"
+          Invoke-WebRequest -Uri "https://pkg.machengine.org/zig/zig-windows-aarch64-0.14.0-dev.2577+271452d22.zip" -OutFile "C:\zig.zip"
           cd C:\
           7z x zig.zip
           Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.14.0-dev.2577+271452d22\"
