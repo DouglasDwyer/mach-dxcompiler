@@ -23,6 +23,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   all:
+    if: false
     needs: draft_release
     strategy:
       matrix:
@@ -78,8 +79,7 @@ jobs:
       matrix:
         target: [
           'x86_64-windows-msvc',
-          # TODO: 'machine type x64 conflicts with arm64' during linking (zig bug)
-          # 'aarch64-windows-msvc',
+          'aarch64-windows-msvc',
         ]
         optimize: [Debug, ReleaseFast]
         include:
@@ -115,6 +115,7 @@ jobs:
           TARGET_OPT: ${{ matrix.target }}_${{ matrix.optimize }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   publish:
+    if: false
     # TODO: re-enable required MSVC builds
     # needs: [all, msvc]
     needs: [all]
