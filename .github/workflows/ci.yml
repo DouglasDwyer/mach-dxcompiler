@@ -48,6 +48,9 @@ jobs:
         run: |
           sudo apt install xz-utils
           sudo sh -c 'wget -c https://pkg.machengine.org/zig/zig-linux-x86_64-0.14.0-dev.1911+3bf89f55c.tar.xz -O - | tar -xJ --strip-components=1 -C /usr/local/bin'
+      - name: Setup mingw-w64 g++
+        if: matrix.target == 'x86_64-windows-gnu'
+        run: sudo apt install g++-mingw-w64-x86-64-posix
       - name: build
         run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
       - name: upload
