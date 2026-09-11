@@ -84,6 +84,7 @@ pub fn build(b: *Build) !void {
             if (msvcrt_dynamic) try mach_dxc_flags.append("-fms-runtime-lib=dll");
             try mach_dxc_flags.append("-D__STDC_CONSTANT_MACROS");
             try mach_dxc_flags.append("-D__STDC_LIMIT_MACROS");
+            try mach_dxc_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
             try mach_dxc_flags.appendSlice(mingw_cxx_flags);
             lib.addCSourceFile(.{
                 .file = b.path("src/mach_dxc.cpp"),
@@ -119,6 +120,12 @@ pub fn build(b: *Build) !void {
                 // fails outright without this.
                 "-D__STDC_CONSTANT_MACROS",
                 "-D__STDC_LIMIT_MACROS",
+                // Newer MSVC STL releases (e.g. the one shipped with current windows-latest
+                // runners) hard-error via static_assert if the compiler isn't a recent-enough
+                // clang-cl/MSVC/CUDA (see yvals_core.h's STL1000/1001/1002 checks) -- Zig's
+                // bundled clang trails that requirement. This is Microsoft's own documented
+                // opt-out for using an untested-but-compatible compiler version.
+                "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH",
             };
 
             try cflags.appendSlice(base_flags);
@@ -246,6 +253,7 @@ pub fn build(b: *Build) !void {
                 try dxcmain_flags.append("-std=c++17");
                 try dxcmain_flags.append("-D__STDC_CONSTANT_MACROS");
                 try dxcmain_flags.append("-D__STDC_LIMIT_MACROS");
+                try dxcmain_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
                 try dxcmain_flags.appendSlice(mingw_cxx_flags);
                 dxc_exe.addCSourceFile(.{
                     .file = b.path(prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp"),
@@ -357,6 +365,7 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
     shared_main_flags.append("-std=c++17") catch @panic("OOM");
     shared_main_flags.append("-D__STDC_CONSTANT_MACROS") catch @panic("OOM");
     shared_main_flags.append("-D__STDC_LIMIT_MACROS") catch @panic("OOM");
+    shared_main_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH") catch @panic("OOM");
     if (mingw_gxx) |m| shared_main_flags.appendSlice(m.cxxFlags(b.allocator) catch @panic("OOM")) catch @panic("OOM");
     sharedlib.addCSourceFile(.{
         .file = b.path("src/shared_main.cpp"),
