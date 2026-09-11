@@ -28,7 +28,7 @@ pub fn build(b: *Build) !void {
         "On windows-gnu (-Dfrom_source only), link the host's mingw-w64 libstdc++ instead of " ++
             "Zig's bundled libc++, so the result links against a stock mingw toolchain (e.g. " ++
             "Rust's x86_64-pc-windows-gnu). Requires a matching <arch>-w64-mingw32-g++ on PATH.",
-    ) orelse false;
+    ) orelse (target.result.os.tag == .windows and target.result.abi == .gnu and target.result.cpu.arch == .x86_64);
     const mingw_gxx: ?MingwGxx = if (windows_gnu_libstdcxx and from_source and target.result.os.tag == .windows and target.result.abi == .gnu)
         MingwGxx.find(b.allocator, target.result.cpu.arch) catch |err|
             std.debug.panic("windows_gnu_libstdcxx: could not query the host mingw-w64 g++: {}", .{err})
@@ -80,7 +80,7 @@ pub fn build(b: *Build) !void {
             lib.step.dependOn(&download_step.step);
 
             var mach_dxc_flags = std.ArrayList([]const u8).init(b.allocator);
-            try mach_dxc_flags.append("-fms-extensions"); // __uuidof and friends (on non-windows targets)
+            try mach_dxc_flags.append("-fms-extensions");
             if (msvcrt_dynamic) try mach_dxc_flags.append("-fms-runtime-lib=dll");
             try mach_dxc_flags.append("-D__STDC_CONSTANT_MACROS");
             try mach_dxc_flags.append("-D__STDC_LIMIT_MACROS");
@@ -112,19 +112,11 @@ pub fn build(b: *Build) !void {
                 "-Wno-macro-redefined",
                 "-Wno-unknown-attributes",
                 "-Wno-implicit-fallthrough",
-                "-fms-extensions", // __uuidof and friends (on non-windows targets)
-                // llvm/Support/DataTypes.h refuses to define [U]INT64_(MIN|MAX|C) etc. unless these
-                // are defined on the command line (its own header trick for this went away with
-                // LLVM's old Makefile-based build). Zig's libc++ headers happen to define these as a
-                // side effect and mask the missing flags; libstdc++ does not, so DataTypes.h's check
-                // fails outright without this.
+                "-fms-extensions",
+                // llvm/Support/DataTypes.h requires these on the command line or it hard-errors.
                 "-D__STDC_CONSTANT_MACROS",
                 "-D__STDC_LIMIT_MACROS",
-                // Newer MSVC STL releases (e.g. the one shipped with current windows-latest
-                // runners) hard-error via static_assert if the compiler isn't a recent-enough
-                // clang-cl/MSVC/CUDA (see yvals_core.h's STL1000/1001/1002 checks) -- Zig's
-                // bundled clang trails that requirement. This is Microsoft's own documented
-                // opt-out for using an untested-but-compatible compiler version.
+                // Newer MSVC STL releases reject older Clang versions unless told not to.
                 "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH",
             };
 
@@ -272,9 +264,6 @@ pub fn build(b: *Build) !void {
                 });
                 b.installArtifact(dxc_exe);
                 dxc_exe.linkLibrary(lib);
-                // addObjectFile() (unlike linkSystemLibrary()/linkLibC()) isn't a declarative
-                // "this needs libX" marker that propagates to whoever links the artifact, so it
-                // must be repeated on every final executable/test, not just `lib` itself.
                 if (mingw_gxx) |m| m.linkInto(dxc_exe);
 
                 if (target.result.os.tag == .windows) {
@@ -427,9 +416,7 @@ const MingwGxx = struct {
         };
         const gxx = try std.fmt.allocPrint(allocator, "{s}-w64-mingw32-g++", .{arch_name});
 
-        // Ask g++ what its own C++ include search path looks like, so libstdc++'s C wrapper
-        // headers (cstdlib, cstring, ...) correctly #include_next into a matching mingw C
-        // library rather than Zig's bundled one.
+        // Ask g++ what its own C++ include search path looks like.
         const preprocess = try std.process.Child.run(.{
             .allocator = allocator,
             .argv = &.{ gxx, "-v", "-E", "-x", "c++", "/dev/null", "-o", "/dev/null" },
@@ -475,11 +462,6 @@ const MingwGxx = struct {
         }
         try flags.append("-include");
         try flags.append(sdkPath("/src/windows_gnu_libstdcxx_compat.h"));
-        // DXCompiler.cpp (and friends) otherwise override the global operator new/delete with
-        // their own allocator, which conflicts with libstdc++.a's own (non-COMDAT) definitions
-        // of the same symbols at link time. DXC already supports building without the
-        // overrides (it does so on non-Windows targets); use that instead of shipping a
-        // modified libstdc++.a.
         try flags.append("-DDXC_DISABLE_ALLOCATOR_OVERRIDES");
         return flags.items;
     }

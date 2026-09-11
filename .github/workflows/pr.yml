@@ -26,8 +26,6 @@ jobs:
             cpu: '-Dcpu=x86_64_v2'
           - target: 'x86_64-windows-gnu'
             cpu: '-Dcpu=x86_64_v2'
-            # See ci.yml: links the host's mingw-w64 libstdc++ instead of Zig's bundled libc++.
-            extra_flags: '-Dwindows_gnu_libstdcxx=true'
           - target: 'x86_64-macos-none'
             cpu: '-Dcpu=x86_64_v2'
     runs-on: ubuntu-latest
@@ -42,7 +40,7 @@ jobs:
         if: matrix.target == 'x86_64-windows-gnu'
         run: sudo apt install g++-mingw-w64-x86-64-posix
       - name: build
-        run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} ${{ matrix.extra_flags }} install dxc
+        run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
   msvc:
     # TODO: re-enable required MSVC builds
     continue-on-error: true

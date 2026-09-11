@@ -38,11 +38,6 @@ jobs:
             cpu: '-Dcpu=x86_64_v2'
           - target: 'x86_64-windows-gnu'
             cpu: '-Dcpu=x86_64_v2'
-            # Link the host's mingw-w64 libstdc++ instead of Zig's bundled libc++, so the
-            # released lib is consumable by stock mingw toolchains (e.g. Rust's
-            # x86_64-pc-windows-gnu). Not available for aarch64-windows-gnu: Debian has no
-            # aarch64-w64-mingw32 g++ package.
-            extra_flags: '-Dwindows_gnu_libstdcxx=true'
           - target: 'x86_64-macos-none'
             cpu: '-Dcpu=x86_64_v2'
     runs-on: ubuntu-latest
@@ -57,7 +52,7 @@ jobs:
         if: matrix.target == 'x86_64-windows-gnu'
         run: sudo apt install g++-mingw-w64-x86-64-posix
       - name: build
-        run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} ${{ matrix.extra_flags }} install dxc
+        run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
       - name: upload
         run: |
           ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" -C zig-out/lib .
