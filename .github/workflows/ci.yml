@@ -10,16 +10,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      - name: Create draft
+      - name: Create draft release
         run: |
           export RELEASE="$(date -u +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
           gh release create "$RELEASE" --draft --title "$RELEASE"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Create draft
-        run: |
-          export RELEASE="$(date -u +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
-          gh release edit "$RELEASE" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   all:
