@@ -847,6 +847,28 @@ fn ensureCommandExists(allocator: std.mem.Allocator, name: []const u8, exist_che
 // Source cloning logic
 // ------------------------------------------
 
+/// Some submodule URLs in DirectXShaderCompiler's .gitmodules point at repositories that no
+/// longer exist. Each `.{ old, new }` pair remaps one to a repository that still hosts the
+/// pinned commit.
+const submodule_url_rewrites = [_][2][]const u8{
+    .{ "https://github.com/hexops/directx-headers", "https://code.hexops.org/hexops/directx-headers" },
+    .{ "https://github.com/slimsag/DIA", "https://github.com/milostosic/DIA" },
+};
+
+/// Runs `git submodule update --init --recursive`, applying `submodule_url_rewrites` so clones
+/// of dead submodule URLs are redirected to working mirrors.
+fn gitSubmoduleUpdate(allocator: std.mem.Allocator, dir: []const u8) !void {
+    var argv = std.ArrayList([]const u8).init(allocator);
+    defer argv.deinit();
+    try argv.append("git");
+    for (submodule_url_rewrites) |rewrite| {
+        try argv.append("-c");
+        try argv.append(try std.fmt.allocPrint(allocator, "url.{s}.insteadOf={s}", .{ rewrite[1], rewrite[0] }));
+    }
+    try argv.appendSlice(&.{ "submodule", "update", "--init", "--recursive" });
+    try exec(allocator, argv.items, dir);
+}
+
 fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revision: []const u8, dir: []const u8) !void {
     if (isEnvVarTruthy(allocator, "NO_ENSURE_SUBMODULES") or isEnvVarTruthy(allocator, "NO_ENSURE_GIT")) {
         return;
@@ -860,7 +882,7 @@ fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revi
             // Reset to the desired revision
             exec(allocator, &[_][]const u8{ "git", "fetch" }, dir) catch |err| log.warn("failed to 'git fetch' in {s}: {s}\n", .{ dir, @errorName(err) });
             try exec(allocator, &[_][]const u8{ "git", "checkout", "--quiet", "--force", revision }, dir);
-            try exec(allocator, &[_][]const u8{ "git", "submodule", "update", "--init", "--recursive" }, dir);
+            try gitSubmoduleUpdate(allocator, dir);
         }
         return;
     } else |err| return switch (err) {
@@ -869,7 +891,7 @@ fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revi
 
             try exec(allocator, &[_][]const u8{ "git", "clone", "-c", "core.longpaths=true", clone_url, dir }, sdkPath("/"));
             try exec(allocator, &[_][]const u8{ "git", "checkout", "--quiet", "--force", revision }, dir);
-            try exec(allocator, &[_][]const u8{ "git", "submodule", "update", "--init", "--recursive" }, dir);
+            try gitSubmoduleUpdate(allocator, dir);
             return;
         },
         else => err,
