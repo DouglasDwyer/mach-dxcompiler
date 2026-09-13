@@ -42,6 +42,14 @@ pub fn build(b: *Build) !void {
         m.cxxFlags(b.allocator) catch |err| std.debug.panic("gnu_libstdcxx: {}", .{err})
     else
         &.{};
+    // Zig predefines `__MSVCRT_VERSION__=0xE00` (a UCRT marker) for this target, which makes
+    // mingw-w64's headers route setjmp/_snprintf_s/vsprintf_s/vsnprintf_s through UCRT-only
+    // entry points that classic msvcrt.dll doesn't export. Restoring the pre-UCRT value
+    // routes them through plain msvcrt-exported symbols instead.
+    const windows_gnu_msvcrt_flags: []const []const u8 = if (target.result.os.tag == .windows and target.result.abi == .gnu)
+        &.{"-D__MSVCRT_VERSION__=0x700"}
+    else
+        &.{};
     // dxc.exe/tests/sharedlib link the host's real libstdc++.a/libgcc_eh.a directly (see
     // GnuLibstdcxx.linkInto) alongside Zig's own libc -- on native linux-gnu, pin Zig's glibc
     // baseline to the host's own version so the two agree on which glibc symbols exist.
@@ -101,6 +109,7 @@ pub fn build(b: *Build) !void {
             try mach_dxc_flags.append("-D__STDC_LIMIT_MACROS");
             try mach_dxc_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
             try mach_dxc_flags.appendSlice(gnu_libstdcxx_cxx_flags);
+            try mach_dxc_flags.appendSlice(windows_gnu_msvcrt_flags);
             lib.addCSourceFile(.{
                 .file = b.path("src/mach_dxc.cpp"),
                 .flags = mach_dxc_flags.items,
@@ -139,6 +148,8 @@ pub fn build(b: *Build) !void {
             try cppflags.appendSlice(base_flags);
             try cflags.appendSlice(gnu_libstdcxx_cxx_flags);
             try cppflags.appendSlice(gnu_libstdcxx_cxx_flags);
+            try cflags.appendSlice(windows_gnu_msvcrt_flags);
+            try cppflags.appendSlice(windows_gnu_msvcrt_flags);
 
             if (msvcrt_dynamic) {
                 try cflags.append("-fms-runtime-lib=dll");
@@ -263,6 +274,7 @@ pub fn build(b: *Build) !void {
                 try dxcmain_flags.append("-D__STDC_LIMIT_MACROS");
                 try dxcmain_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
                 try dxcmain_flags.appendSlice(gnu_libstdcxx_cxx_flags);
+                try dxcmain_flags.appendSlice(windows_gnu_msvcrt_flags);
                 dxc_exe.addCSourceFile(.{
                     .file = b.path(prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp"),
                     .flags = dxcmain_flags.items,
@@ -372,6 +384,9 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
     shared_main_flags.append("-D__STDC_LIMIT_MACROS") catch @panic("OOM");
     shared_main_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH") catch @panic("OOM");
     if (gnu_libstdcxx_gxx) |m| shared_main_flags.appendSlice(m.cxxFlags(b.allocator) catch @panic("OOM")) catch @panic("OOM");
+    if (target.result.os.tag == .windows and target.result.abi == .gnu) {
+        shared_main_flags.append("-D__MSVCRT_VERSION__=0x700") catch @panic("OOM");
+    }
     sharedlib.addCSourceFile(.{
         .file = b.path("src/shared_main.cpp"),
         .flags = shared_main_flags.items,
