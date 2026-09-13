@@ -1,5 +1,5 @@
-// Force-included (via -include) into every C++ translation unit when building a gnu-abi target
-// (linux-gnu, windows-gnu) against the real, ambient libstdc++ instead of Zig's bundled libc++.
+// Force-included (via -include) into every C++ translation unit when building a GNU target
+// against libstdc++ instead of Zig's bundled libc++.
 //
 // libc++'s <stddef.h> (the C-header-style wrapper, as opposed to <cstddef>) injects a
 // compatibility `nullptr_t` typedef into the *global* namespace as a courtesy for old code
