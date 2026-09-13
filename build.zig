@@ -417,23 +417,20 @@ fn linkMachDxcDependenciesModule(mod: *std.Build.Module) void {
     }
 }
 
-/// Compiles DXC's sources on a gnu-abi target (windows-gnu, linux-gnu) against a host-installed
-/// g++'s real, ambient libstdc++ instead of Zig's bundled libc++, so `machdxcompiler`'s shipped
-/// static library is an ordinary, non-self-contained C++ library that the consumer's own
-/// toolchain supplies the runtime for -- the same way any C++ library consumer already expects
-/// to, and the same way windows-msvc's `/DEFAULTLIB` autolinking (which gnu-abi has no
-/// equivalent of) makes that target self-contained. Only affects compiling: `linkInto` (which
-/// actually links libstdc++ into a step) must never be called on `machdxcompiler`'s own
-/// static-library step, only on this repo's own dxc.exe/tests/sharedlib.
+/// Compiles DXC's sources for gnu-abi targets (windows-gnu, linux-gnu) against a host-installed
+/// g++'s real libstdc++, instead of Zig's bundled libc++. This leaves `machdxcompiler`'s shipped
+/// static library non-self-contained, unlike windows-msvc, which is self-contained via
+/// `/DEFAULTLIB` autolinking. `linkInto` must only be called on this repo's own
+/// dxc.exe/tests/sharedlib, never on `machdxcompiler`'s own static-library step.
 const GnuLibstdcxx = struct {
     /// The C++ system include directories this g++ would use itself, in search order.
     include_dirs: []const []const u8,
     /// Absolute paths to the static archives providing libstdc++ and its runtime support.
     lib_files: []const []const u8,
-    /// On a native linux-gnu build, the host's own glibc version, so dxc.exe/tests/sharedlib
-    /// target it instead of Zig's own default glibc baseline (which can be too old for symbols
-    /// the host's real libstdc++.a/libgcc_eh.a reference). Null for cross-compiles and whenever
-    /// detection fails.
+    /// The host's own glibc version, detected on a native linux-gnu build only. dxc.exe/tests/
+    /// sharedlib target it instead of Zig's own default glibc baseline, which can be missing
+    /// symbols the host's real libstdc++.a/libgcc_eh.a reference. Null for cross-compiles or
+    /// when detection fails.
     glibc_version: ?std.SemanticVersion,
 
     fn find(allocator: std.mem.Allocator, target: std.Target) !GnuLibstdcxx {
@@ -532,9 +529,10 @@ const GnuLibstdcxx = struct {
     }
 
     /// Links libstdc++ and its runtime support into `step`, in place of Zig's bundled libc++.
-    /// Only ever call this on a real executable/shared-library step, never on `machdxcompiler`'s
-    /// own static-library step -- embedding these .a files there via `addObjectFile` would bury
-    /// their symbols as an opaque nested archive member that `ar`'s own index can't see into.
+    /// Only call this on a real executable or shared-library step. Never call it on
+    /// `machdxcompiler`'s own static-library step: embedding these `.a` files there via
+    /// `addObjectFile` would bury their symbols in an opaque nested archive member that `ar`'s
+    /// own index can't see into.
     fn linkInto(self: GnuLibstdcxx, step: *std.Build.Step.Compile) void {
         for (self.lib_files) |file| step.addObjectFile(.{ .cwd_relative = file });
     }
