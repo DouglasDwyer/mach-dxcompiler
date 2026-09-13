@@ -136,27 +136,3 @@ jobs:
           gh release edit "$RELEASE" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Record latest release version
-        id: recorded_release_version
-        # Note: we find the latest non-'update to latest binary release' commit here, which is not
-        # necessarily HEAD because another build could have succeeded before us and HEAD may now refer
-        # to 'update to latest binary release' instead of the commit we were building.
-        # By doing this, we ensure any update we push would refer to the absolute latest binary
-        # release even if *this* CI run is older.
-        run: echo "recorded_release_version=$(git log --oneline | grep -v 'update to latest binary release' | head -n1 | cut -d " " -f1)" >> $GITHUB_ENV
-      - name: Checkout hexops/mach-dxcompiler repo
-        uses: actions/checkout@v3
-        with:
-          repository: hexops/mach-dxcompiler
-          token: ${{ secrets.HEXOPS_MACH_DXCOMPILER_PUSH }}
-      - name: 'update hard-coded binary release version'
-        env:
-          RELEASE_COMMIT: ${{env.recorded_release_version}}
-        run: |
-          export RELEASE="$(date -u +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
-          sed -i "/const latest_binary_release =/c\const latest_binary_release = \"$RELEASE\";" ./build.zig
-          git config user.name 'Release automation'
-          git config user.email 'wrench@hexops.com'
-          git add .
-          git commit -m 'update to latest binary release'
-          git push -u origin HEAD

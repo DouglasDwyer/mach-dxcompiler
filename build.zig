@@ -22,22 +22,37 @@ pub fn build(b: *Build) !void {
     const msvcrt_dynamic = b.option(bool, "msvcrt_dynamic", "Link with the dynamic MSVC runtime") orelse false;
     const skip_executables = b.option(bool, "skip_executables", "Skip building executables") orelse false;
     const skip_tests = b.option(bool, "skip_tests", "Skip building tests") orelse false;
-    const windows_gnu_libstdcxx = b.option(
+    const gnu_libstdcxx = b.option(
         bool,
-        "windows_gnu_libstdcxx",
-        "On windows-gnu (-Dfrom_source only), link the host's mingw-w64 libstdc++ instead of " ++
-            "Zig's bundled libc++, so the result links against a stock mingw toolchain (e.g. " ++
-            "Rust's x86_64-pc-windows-gnu). Requires a matching <arch>-w64-mingw32-g++ on PATH.",
-    ) orelse (target.result.os.tag == .windows and target.result.abi == .gnu and target.result.cpu.arch == .x86_64);
-    const mingw_gxx: ?MingwGxx = if (windows_gnu_libstdcxx and from_source and target.result.os.tag == .windows and target.result.abi == .gnu)
-        MingwGxx.find(b.allocator, target.result.cpu.arch) catch |err|
-            std.debug.panic("windows_gnu_libstdcxx: could not query the host mingw-w64 g++: {}", .{err})
+        "gnu_libstdcxx",
+        "On linux-gnu/windows-gnu (-Dfrom_source only), compile against the host's real " ++
+            "libstdc++ instead of Zig's bundled libc++, so the shipped static library links " ++
+            "against whatever a stock gnu toolchain already provides (e.g. Rust's " ++
+            "x86_64-pc-windows-gnu or x86_64-unknown-linux-gnu) with no extra bundling. " ++
+            "Requires a matching g++ on PATH (system g++ for linux-gnu, <arch>-w64-mingw32-g++ " ++
+            "for windows-gnu).",
+    ) orelse (from_source and target.result.abi == .gnu and target.result.cpu.arch == .x86_64 and
+        (target.result.os.tag == .linux or target.result.os.tag == .windows));
+    const gnu_libstdcxx_gxx: ?GnuLibstdcxx = if (gnu_libstdcxx)
+        GnuLibstdcxx.find(b.allocator, target.result) catch |err|
+            std.debug.panic("gnu_libstdcxx: could not query the host g++: {}", .{err})
     else
         null;
-    const mingw_cxx_flags: []const []const u8 = if (mingw_gxx) |m|
-        m.cxxFlags(b.allocator) catch |err| std.debug.panic("windows_gnu_libstdcxx: {}", .{err})
+    const gnu_libstdcxx_cxx_flags: []const []const u8 = if (gnu_libstdcxx_gxx) |m|
+        m.cxxFlags(b.allocator) catch |err| std.debug.panic("gnu_libstdcxx: {}", .{err})
     else
         &.{};
+    // dxc.exe/tests/sharedlib link the host's real libstdc++.a/libgcc_eh.a directly (see
+    // GnuLibstdcxx.linkInto) alongside Zig's own libc -- on native linux-gnu, pin Zig's glibc
+    // baseline to the host's own version so the two agree on which glibc symbols exist.
+    const exe_target: std.Build.ResolvedTarget = if (gnu_libstdcxx_gxx) |m| blk: {
+        if (m.glibc_version) |v| {
+            var query = target.query;
+            query.glibc_version = v;
+            break :blk b.resolveTargetQuery(query);
+        }
+        break :blk target;
+    } else target;
 
     const machdxcompiler: struct { lib: *std.Build.Step.Compile, lib_path: ?[]const u8 } = blk: {
         if (!from_source) {
@@ -85,7 +100,7 @@ pub fn build(b: *Build) !void {
             try mach_dxc_flags.append("-D__STDC_CONSTANT_MACROS");
             try mach_dxc_flags.append("-D__STDC_LIMIT_MACROS");
             try mach_dxc_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
-            try mach_dxc_flags.appendSlice(mingw_cxx_flags);
+            try mach_dxc_flags.appendSlice(gnu_libstdcxx_cxx_flags);
             lib.addCSourceFile(.{
                 .file = b.path("src/mach_dxc.cpp"),
                 .flags = mach_dxc_flags.items,
@@ -122,12 +137,13 @@ pub fn build(b: *Build) !void {
 
             try cflags.appendSlice(base_flags);
             try cppflags.appendSlice(base_flags);
+            try cflags.appendSlice(gnu_libstdcxx_cxx_flags);
+            try cppflags.appendSlice(gnu_libstdcxx_cxx_flags);
 
             if (msvcrt_dynamic) {
                 try cflags.append("-fms-runtime-lib=dll");
                 try cppflags.append("-fms-runtime-lib=dll");
             }
-            try cppflags.appendSlice(mingw_cxx_flags);
 
             addConfigHeaders(b, lib);
             addIncludes(b, lib);
@@ -224,7 +240,7 @@ pub fn build(b: *Build) !void {
                 lib.defineCMacro("MACH_DXC_C_IMPLEMENTATION", "");
             }
 
-            linkMachDxcDependencies(lib, mingw_gxx);
+            linkMachDxcDependencies(lib, gnu_libstdcxx_gxx);
             lib.addIncludePath(b.path("src"));
 
             // TODO: investigate SSE2 #define / cmake option for CPU target
@@ -237,7 +253,7 @@ pub fn build(b: *Build) !void {
                 const dxc_exe = b.addExecutable(.{
                     .name = "dxc",
                     .optimize = optimize,
-                    .target = target,
+                    .target = exe_target,
                 });
                 const install_dxc_step = b.step("dxc", "Build and install dxc.exe");
                 install_dxc_step.dependOn(&b.addInstallArtifact(dxc_exe, .{}).step);
@@ -246,7 +262,7 @@ pub fn build(b: *Build) !void {
                 try dxcmain_flags.append("-D__STDC_CONSTANT_MACROS");
                 try dxcmain_flags.append("-D__STDC_LIMIT_MACROS");
                 try dxcmain_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
-                try dxcmain_flags.appendSlice(mingw_cxx_flags);
+                try dxcmain_flags.appendSlice(gnu_libstdcxx_cxx_flags);
                 dxc_exe.addCSourceFile(.{
                     .file = b.path(prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp"),
                     .flags = dxcmain_flags.items,
@@ -264,7 +280,7 @@ pub fn build(b: *Build) !void {
                 });
                 b.installArtifact(dxc_exe);
                 dxc_exe.linkLibrary(lib);
-                if (mingw_gxx) |m| m.linkInto(dxc_exe);
+                if (gnu_libstdcxx_gxx) |m| m.linkInto(dxc_exe);
 
                 if (target.result.os.tag == .windows) {
                     // windows must be built with LTO disabled due to:
@@ -303,7 +319,7 @@ pub fn build(b: *Build) !void {
                 }
             }
 
-            if (build_shared) buildShared(b, lib, optimize, target, mingw_gxx);
+            if (build_shared) buildShared(b, lib, optimize, exe_target, gnu_libstdcxx_gxx);
 
             break :blk .{ .lib = lib, .lib_path = null };
         }
@@ -330,12 +346,12 @@ pub fn build(b: *Build) !void {
     const main_tests = b.addTest(.{
         .name = "dxcompiler-tests",
         .root_source_file = b.path("src/main.zig"),
-        .target = target,
+        .target = exe_target,
         .optimize = optimize,
     });
     main_tests.addIncludePath(b.path("src"));
     main_tests.linkLibrary(machdxcompiler.lib);
-    if (mingw_gxx) |m| m.linkInto(main_tests);
+    if (gnu_libstdcxx_gxx) |m| m.linkInto(main_tests);
     if (machdxcompiler.lib_path) |p| main_tests.addLibraryPath(.{ .cwd_relative = p });
 
     b.installArtifact(main_tests);
@@ -343,7 +359,7 @@ pub fn build(b: *Build) !void {
     test_step.dependOn(&b.addRunArtifact(main_tests).step);
 }
 
-fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.OptimizeMode, target: std.Build.ResolvedTarget, mingw_gxx: ?MingwGxx) void {
+fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.OptimizeMode, target: std.Build.ResolvedTarget, gnu_libstdcxx_gxx: ?GnuLibstdcxx) void {
     const sharedlib = b.addSharedLibrary(.{
         .name = "machdxcompiler",
         .optimize = optimize,
@@ -355,7 +371,7 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
     shared_main_flags.append("-D__STDC_CONSTANT_MACROS") catch @panic("OOM");
     shared_main_flags.append("-D__STDC_LIMIT_MACROS") catch @panic("OOM");
     shared_main_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH") catch @panic("OOM");
-    if (mingw_gxx) |m| shared_main_flags.appendSlice(m.cxxFlags(b.allocator) catch @panic("OOM")) catch @panic("OOM");
+    if (gnu_libstdcxx_gxx) |m| shared_main_flags.appendSlice(m.cxxFlags(b.allocator) catch @panic("OOM")) catch @panic("OOM");
     sharedlib.addCSourceFile(.{
         .file = b.path("src/shared_main.cpp"),
         .flags = shared_main_flags.items,
@@ -366,17 +382,20 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
 
     b.installArtifact(sharedlib);
     sharedlib.linkLibrary(lib);
-    if (mingw_gxx) |m| m.linkInto(sharedlib);
+    if (gnu_libstdcxx_gxx) |m| m.linkInto(sharedlib);
 }
 
-fn linkMachDxcDependencies(step: *std.Build.Step.Compile, mingw_gxx: ?MingwGxx) void {
+/// Links `step`'s C/C++ standard library dependencies. On non-msvc targets `step` compiles
+/// against Zig's bundled libc++ by default, *unless* `gnu_libstdcxx_gxx` is set, in which case it
+/// only links libc -- the caller links the actual C++ runtime itself when needed, e.g. dxc_exe
+/// calls `gnu_libstdcxx_gxx.linkInto()`.
+fn linkMachDxcDependencies(step: *std.Build.Step.Compile, gnu_libstdcxx_gxx: ?GnuLibstdcxx) void {
     const target = step.rootModuleTarget();
     if (target.abi == .msvc) {
         // https://github.com/ziglang/zig/issues/5312
         step.linkLibC();
-    } else if (mingw_gxx) |m| {
+    } else if (gnu_libstdcxx_gxx != null) {
         step.linkLibC();
-        m.linkInto(step);
     } else step.linkLibCpp();
     if (target.os.tag == .windows) {
         step.linkSystemLibrary("ole32");
@@ -398,23 +417,36 @@ fn linkMachDxcDependenciesModule(mod: *std.Build.Module) void {
     }
 }
 
-/// Locates a host-installed mingw-w64 g++ (e.g. `x86_64-w64-mingw32-g++`) and extracts the
-/// paths needed to compile and link against its libstdc++ instead of Zig's bundled libc++.
-/// This makes the windows-gnu build consumable by stock mingw toolchains (which ship
-/// libstdc++, not libc++) at the cost of a real system dependency for that one target.
-const MingwGxx = struct {
-    /// The C++ system include directories this mingw-w64 g++ would use itself, in search order.
+/// Compiles DXC's sources for gnu-abi targets (windows-gnu, linux-gnu) against a host-installed
+/// g++'s real libstdc++, instead of Zig's bundled libc++. This leaves `machdxcompiler`'s shipped
+/// static library non-self-contained, unlike windows-msvc, which is self-contained via
+/// `/DEFAULTLIB` autolinking. `linkInto` must only be called on this repo's own
+/// dxc.exe/tests/sharedlib, never on `machdxcompiler`'s own static-library step.
+const GnuLibstdcxx = struct {
+    /// The C++ system include directories this g++ would use itself, in search order.
     include_dirs: []const []const u8,
     /// Absolute paths to the static archives providing libstdc++ and its runtime support.
     lib_files: []const []const u8,
+    /// The host's own glibc version, detected on a native linux-gnu build only. dxc.exe/tests/
+    /// sharedlib target it instead of Zig's own default glibc baseline, which can be missing
+    /// symbols the host's real libstdc++.a/libgcc_eh.a reference. Null for cross-compiles or
+    /// when detection fails.
+    glibc_version: ?std.SemanticVersion,
 
-    fn find(allocator: std.mem.Allocator, arch: std.Target.Cpu.Arch) !MingwGxx {
-        const arch_name = switch (arch) {
+    fn find(allocator: std.mem.Allocator, target: std.Target) !GnuLibstdcxx {
+        const arch_name: []const u8 = switch (target.cpu.arch) {
             .x86_64 => "x86_64",
             .aarch64 => "aarch64",
-            else => return error.UnsupportedMingwArch,
+            else => return error.UnsupportedGnuArch,
         };
-        const gxx = try std.fmt.allocPrint(allocator, "{s}-w64-mingw32-g++", .{arch_name});
+        const gxx: []const u8 = switch (target.os.tag) {
+            .windows => try std.fmt.allocPrint(allocator, "{s}-w64-mingw32-g++", .{arch_name}),
+            .linux => if (target.cpu.arch == builtin.cpu.arch)
+                "g++"
+            else
+                try std.fmt.allocPrint(allocator, "{s}-linux-gnu-g++", .{arch_name}),
+            else => return error.UnsupportedGnuOs,
+        };
 
         // Ask g++ what its own C++ include search path looks like.
         const preprocess = try std.process.Child.run(.{
@@ -424,9 +456,9 @@ const MingwGxx = struct {
         const marker_start = "#include <...> search starts here:\n";
         const marker_end = "\nEnd of search list.";
         const start = (std.mem.indexOf(u8, preprocess.stderr, marker_start) orelse
-            return error.MingwIncludeSearchListNotFound) + marker_start.len;
+            return error.GnuIncludeSearchListNotFound) + marker_start.len;
         const end = std.mem.indexOfPos(u8, preprocess.stderr, start, marker_end) orelse
-            return error.MingwIncludeSearchListNotFound;
+            return error.GnuIncludeSearchListNotFound;
 
         var include_dirs = std.ArrayList([]const u8).init(allocator);
         var lines = std.mem.splitScalar(u8, preprocess.stderr[start..end], '\n');
@@ -435,39 +467,73 @@ const MingwGxx = struct {
             if (dir.len > 0) try include_dirs.append(dir);
         }
 
+        const wanted_libs: []const []const u8 = switch (target.os.tag) {
+            .windows => &.{ "libstdc++.a", "libgcc_eh.a", "libgcc.a", "libwinpthread.a", "libmsvcrt.a" },
+            .linux => &.{ "libstdc++.a", "libgcc_eh.a", "libgcc.a" },
+            else => unreachable,
+        };
         var lib_files = std.ArrayList([]const u8).init(allocator);
-        for ([_][]const u8{ "libstdc++.a", "libgcc_eh.a", "libgcc.a", "libwinpthread.a", "libmsvcrt.a" }) |name| {
+        for (wanted_libs) |name| {
             const result = try std.process.Child.run(.{
                 .allocator = allocator,
                 .argv = &.{ gxx, try std.fmt.allocPrint(allocator, "-print-file-name={s}", .{name}) },
             });
             const path = std.mem.trimRight(u8, result.stdout, "\r\n");
             if (std.mem.eql(u8, path, name)) {
-                log.err("windows_gnu_libstdcxx: {s} could not locate {s}; is g++-mingw-w64 installed for {s}?", .{ gxx, name, arch_name });
-                return error.MingwLibraryNotFound;
+                log.err("gnu_libstdcxx: {s} could not locate {s}", .{ gxx, name });
+                return error.GnuLibraryNotFound;
             }
             try lib_files.append(path);
         }
 
-        return .{ .include_dirs = include_dirs.items, .lib_files = lib_files.items };
+        const glibc_version: ?std.SemanticVersion = if (target.os.tag == .linux and target.cpu.arch == builtin.cpu.arch)
+            detectNativeGlibcVersion(allocator) catch null
+        else
+            null;
+
+        return .{ .include_dirs = include_dirs.items, .lib_files = lib_files.items, .glibc_version = glibc_version };
     }
 
-    /// Compile flags that redirect C++ standard library includes to this mingw-w64 g++'s own.
-    fn cxxFlags(self: MingwGxx, allocator: std.mem.Allocator) ![]const []const u8 {
+    /// Parses the running host's own glibc version out of `ldd --version`'s first line (e.g.
+    /// "ldd (Debian GLIBC 2.41-12+deb13u3) 2.41" -> 2.41.0). Best-effort: only meaningful for a
+    /// native build, where the host's glibc is genuinely the one being linked against.
+    fn detectNativeGlibcVersion(allocator: std.mem.Allocator) !std.SemanticVersion {
+        const result = try std.process.Child.run(.{ .allocator = allocator, .argv = &.{ "ldd", "--version" } });
+        const first_line = result.stdout[0..(std.mem.indexOfScalar(u8, result.stdout, '\n') orelse result.stdout.len)];
+        const last_space = std.mem.lastIndexOfScalar(u8, first_line, ' ') orelse return error.GlibcVersionNotFound;
+        var parts = std.mem.splitScalar(u8, std.mem.trim(u8, first_line[last_space..], " \t\r"), '.');
+        const major = try std.fmt.parseInt(usize, parts.next() orelse return error.GlibcVersionNotFound, 10);
+        const minor = try std.fmt.parseInt(usize, parts.next() orelse "0", 10);
+        return .{ .major = major, .minor = minor, .patch = 0 };
+    }
+
+    /// Compile flags that redirect the *entire* system include environment -- C and C++ -- to
+    /// this g++'s own. Redirecting only the C++ standard library (`-nostdinc++`) isn't enough:
+    /// DXC's C sources (e.g. regerror.c) and C-level code in its C++ sources also reference CRT
+    /// symbols whose exact shape differs between Zig's own bundled headers (UCRT-flavored, e.g.
+    /// the `_s`-suffixed "secure" printf family and MSVC-ABI setjmp) and the target's real,
+    /// ambient CRT -- classic msvcrt.dll on windows-gnu (confirmed to be what Rust's own
+    /// x86_64-pc-windows-gnu target links against, in rustc's windows_gnu.rs target spec), which
+    /// lacks those UCRT-only symbols entirely. `-nostdinc` (the broader flag) drops both.
+    fn cxxFlags(self: GnuLibstdcxx, allocator: std.mem.Allocator) ![]const []const u8 {
         var flags = std.ArrayList([]const u8).init(allocator);
-        try flags.append("-nostdinc++");
+        try flags.append("-nostdinc");
         for (self.include_dirs) |dir| {
             try flags.append("-isystem");
             try flags.append(dir);
         }
         try flags.append("-include");
-        try flags.append(sdkPath("/src/windows_gnu_libstdcxx_compat.h"));
+        try flags.append(sdkPath("/src/gnu_libstdcxx_compat.h"));
         try flags.append("-DDXC_DISABLE_ALLOCATOR_OVERRIDES");
         return flags.items;
     }
 
     /// Links libstdc++ and its runtime support into `step`, in place of Zig's bundled libc++.
-    fn linkInto(self: MingwGxx, step: *std.Build.Step.Compile) void {
+    /// Only call this on a real executable or shared-library step. Never call it on
+    /// `machdxcompiler`'s own static-library step: embedding these `.a` files there via
+    /// `addObjectFile` would bury their symbols in an opaque nested archive member that `ar`'s
+    /// own index can't see into.
+    fn linkInto(self: GnuLibstdcxx, step: *std.Build.Step.Compile) void {
         for (self.lib_files) |file| step.addObjectFile(.{ .cwd_relative = file });
     }
 };
