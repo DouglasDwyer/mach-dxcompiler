@@ -45,8 +45,12 @@ pub fn build(b: *Build) !void {
     // Zig predefines `__MSVCRT_VERSION__=0xE00` (a UCRT marker) for this target, which makes
     // mingw-w64's headers route setjmp/_snprintf_s/vsprintf_s/vsnprintf_s through UCRT-only
     // entry points that classic msvcrt.dll doesn't export. Restoring the pre-UCRT value
-    // routes them through plain msvcrt-exported symbols instead.
-    const windows_gnu_msvcrt_flags: []const []const u8 = if (target.result.os.tag == .windows and target.result.abi == .gnu)
+    // routes them through plain msvcrt-exported symbols instead -- but only once
+    // `gnu_libstdcxx` has also redirected compilation to that real mingw-w64 toolchain
+    // (currently x86_64 only): targets still using Zig's own bundled Windows support (e.g.
+    // aarch64-windows-gnu) only implement the UCRT-style entry points, so forcing this back
+    // would just break them instead.
+    const windows_gnu_msvcrt_flags: []const []const u8 = if (target.result.os.tag == .windows and gnu_libstdcxx_gxx != null)
         &.{"-D__MSVCRT_VERSION__=0x700"}
     else
         &.{};
@@ -384,7 +388,7 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
     shared_main_flags.append("-D__STDC_LIMIT_MACROS") catch @panic("OOM");
     shared_main_flags.append("-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH") catch @panic("OOM");
     if (gnu_libstdcxx_gxx) |m| shared_main_flags.appendSlice(m.cxxFlags(b.allocator) catch @panic("OOM")) catch @panic("OOM");
-    if (target.result.os.tag == .windows and target.result.abi == .gnu) {
+    if (target.result.os.tag == .windows and gnu_libstdcxx_gxx != null) {
         shared_main_flags.append("-D__MSVCRT_VERSION__=0x700") catch @panic("OOM");
     }
     sharedlib.addCSourceFile(.{
