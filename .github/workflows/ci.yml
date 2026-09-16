@@ -93,7 +93,7 @@ jobs:
             link-flags: '-Dmsvcrt_dynamic -Dskip_executables'
             post-build: ''
             target-postfix: '_Dynamic'
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v3
