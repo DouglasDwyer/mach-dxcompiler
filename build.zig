@@ -332,7 +332,7 @@ pub fn build(b: *Build) !void {
                         try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
                         // This is probably a bug in the Zig linker.
                     }
-                    try addCrossArchMsvcLibPaths(b, dxc_exe);
+                    try setCrossArchMsvcLibc(b, dxc_exe);
                 }
             }
 
@@ -370,7 +370,7 @@ pub fn build(b: *Build) !void {
     main_tests.linkLibrary(machdxcompiler.lib);
     if (gnu_libstdcxx_gxx) |m| m.linkInto(main_tests);
     if (machdxcompiler.lib_path) |p| main_tests.addLibraryPath(.{ .cwd_relative = p });
-    try addCrossArchMsvcLibPaths(b, main_tests);
+    try setCrossArchMsvcLibc(b, main_tests);
 
     b.installArtifact(main_tests);
     const test_step = b.step("test", "Run library tests");
@@ -406,11 +406,12 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
     if (gnu_libstdcxx_gxx) |m| m.linkInto(sharedlib);
 }
 
-/// Zig locates the MSVC CRT/STL import libs (libcmt, libvcruntime, libcpmt, libucrt, ...) using the
-/// *host* architecture, so linking aarch64-windows-msvc from an x86_64 host picks up x64 libs and
-/// fails with "machine type x64 conflicts with arm64". Add the target architecture's lib dirs to
-/// `step` so lld-link finds them before the host ones.
-fn addCrossArchMsvcLibPaths(b: *Build, step: *std.Build.Step.Compile) !void {
+/// Zig's native MSVC detection computes the CRT/STL/UCRT/kernel32 lib dirs from the architecture
+/// *Zig itself runs on*, and passes them to lld-link ahead of any `-L` paths. Cross-building
+/// aarch64-windows-msvc from an x86_64 host therefore links the x64 libs and fails with
+/// "machine type x64 conflicts with arm64". Give `step` an explicit libc description pointing at
+/// the target architecture's dirs instead (the include dirs match what native detection finds).
+fn setCrossArchMsvcLibc(b: *Build, step: *std.Build.Step.Compile) !void {
     const target = step.rootModuleTarget();
     if (builtin.os.tag != .windows or target.os.tag != .windows or target.abi != .msvc) return;
     if (target.cpu.arch == builtin.cpu.arch) return;
@@ -426,14 +427,24 @@ fn addCrossArchMsvcLibPaths(b: *Build, step: *std.Build.Step.Compile) !void {
     // e.g. C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130
     const msvc_lib_dir = try msvc.MsvcLibDir.find(b.allocator);
     const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir, "..\\.." });
-    step.addLibraryPath(.{ .cwd_relative = try std.fs.path.join(b.allocator, &.{ msvc_dir, "Lib", arch_dir }) });
 
     const sdk = try msvc.ZigWindowsSDK.find(b.allocator);
-    if (sdk.windows10sdk) |sdk10| {
-        const sdk_lib_dir = try std.fs.path.join(b.allocator, &.{ sdk10.path, "Lib", sdk10.version });
-        step.addLibraryPath(.{ .cwd_relative = try std.fs.path.join(b.allocator, &.{ sdk_lib_dir, "ucrt", arch_dir }) });
-        step.addLibraryPath(.{ .cwd_relative = try std.fs.path.join(b.allocator, &.{ sdk_lib_dir, "um", arch_dir }) });
-    }
+    const sdk10 = sdk.windows10sdk orelse return;
+
+    const libc_txt = try std.fmt.allocPrint(b.allocator,
+        \\include_dir={[sdk]s}\Include\{[ver]s}\ucrt
+        \\sys_include_dir={[msvc]s}\include
+        \\crt_dir={[sdk]s}\Lib\{[ver]s}\ucrt\{[arch]s}
+        \\msvc_lib_dir={[msvc]s}\Lib\{[arch]s}
+        \\kernel32_lib_dir={[sdk]s}\Lib\{[ver]s}\um\{[arch]s}
+        \\gcc_dir=
+        \\
+    , .{ .sdk = sdk10.path, .ver = sdk10.version, .msvc = msvc_dir, .arch = arch_dir });
+
+    const write_libc = b.addWriteFiles();
+    const libc_file = write_libc.add(b.fmt("libc-{s}.txt", .{arch_dir}), libc_txt);
+    step.setLibCFile(libc_file);
+    step.step.dependOn(&write_libc.step); // setLibCFile doesn't add the dependency itself
 }
 
 /// Links `step`'s C/C++ standard library dependencies. On non-msvc targets `step` compiles
