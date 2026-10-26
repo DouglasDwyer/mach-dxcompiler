@@ -75,8 +75,7 @@ jobs:
       matrix:
         target: [
           'x86_64-windows-msvc',
-          # TODO: 'machine type x64 conflicts with arm64' during linking (zig bug)
-          # 'aarch64-windows-msvc',
+          'aarch64-windows-msvc',
         ]
         optimize: [Debug, ReleaseFast]
         link-mode: ['Static', 'Dynamic']
@@ -90,6 +89,18 @@ jobs:
           - target: 'x86_64-windows-msvc'
             link-mode: 'Dynamic'
             cpu: '-Dcpu=x86_64_v2'
+            link-flags: '-Dmsvcrt_dynamic -Dskip_executables'
+            post-build: ''
+            target-postfix: '_Dynamic'
+          - target: 'aarch64-windows-msvc'
+            link-mode: 'Static'
+            cpu: ''
+            link-flags: ''
+            post-build: 'install dxc'
+            target-postfix: ''
+          - target: 'aarch64-windows-msvc'
+            link-mode: 'Dynamic'
+            cpu: ''
             link-flags: '-Dmsvcrt_dynamic -Dskip_executables'
             post-build: ''
             target-postfix: '_Dynamic'
