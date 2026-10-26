@@ -406,11 +406,8 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
     if (gnu_libstdcxx_gxx) |m| m.linkInto(sharedlib);
 }
 
-/// Zig's native MSVC detection computes the CRT/STL/UCRT/kernel32 lib dirs from the architecture
-/// *Zig itself runs on*, and passes them to lld-link ahead of any `-L` paths. Cross-building
-/// aarch64-windows-msvc from an x86_64 host therefore links the x64 libs and fails with
-/// "machine type x64 conflicts with arm64". Give `step` an explicit libc description pointing at
-/// the target architecture's dirs instead (the include dirs match what native detection finds).
+/// Give `step` an explicit libc description pointing at the target architecture's MSVC/SDK dirs;
+/// without it, Zig links the host architecture's CRT libs and fails with "machine type x64 conflicts with arm64".
 fn setCrossArchMsvcLibc(b: *Build, step: *std.Build.Step.Compile) !void {
     const target = step.rootModuleTarget();
     if (builtin.os.tag != .windows or target.os.tag != .windows or target.abi != .msvc) return;
@@ -424,7 +421,6 @@ fn setCrossArchMsvcLibc(b: *Build, step: *std.Build.Step.Compile) !void {
     };
     const msvc = @import("msvc.zig");
 
-    // e.g. C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130
     const msvc_lib_dir = try msvc.MsvcLibDir.find(b.allocator);
     const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir, "..\\.." });
 
@@ -444,10 +440,8 @@ fn setCrossArchMsvcLibc(b: *Build, step: *std.Build.Step.Compile) !void {
     const write_libc = b.addWriteFiles();
     const libc_file = write_libc.add(b.fmt("libc-{s}.txt", .{arch_dir}), libc_txt);
     step.setLibCFile(libc_file);
-    step.step.dependOn(&write_libc.step); // setLibCFile doesn't add the dependency itself
+    step.step.dependOn(&write_libc.step);
 
-    // With an explicit libc file Zig no longer searches these dirs for `-l` system libs
-    // (ole32, oleaut32, version, ...), so add them as library paths as well.
     step.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}\\Lib\\{s}\\um\\{s}", .{ sdk10.path, sdk10.version, arch_dir }) });
     step.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}\\Lib\\{s}\\ucrt\\{s}", .{ sdk10.path, sdk10.version, arch_dir }) });
     step.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}\\Lib\\{s}", .{ msvc_dir, arch_dir }) });
