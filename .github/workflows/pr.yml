@@ -5,55 +5,16 @@ on:
     paths-ignore:
       - "**.md"
 jobs:
-  all:
-    strategy:
-      matrix:
-        target: [
-          'x86_64-linux-gnu',
-          'x86_64-linux-musl',
-          'aarch64-linux-gnu',
-          'aarch64-linux-musl',
-          'x86_64-windows-gnu',
-          'aarch64-windows-gnu',
-          'x86_64-macos-none',
-          'aarch64-macos-none',
-        ]
-        optimize: [Debug, ReleaseFast]
-        include:
-          - target: 'x86_64-linux-gnu'
-            cpu: '-Dcpu=x86_64_v2'
-          - target: 'x86_64-linux-musl'
-            cpu: '-Dcpu=x86_64_v2'
-          - target: 'x86_64-windows-gnu'
-            cpu: '-Dcpu=x86_64_v2'
-          - target: 'x86_64-macos-none'
-            cpu: '-Dcpu=x86_64_v2'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Setup Zig
-        run: |
-          sudo apt install xz-utils
-          sudo sh -c 'wget -c https://pkg.machengine.org/zig/zig-linux-x86_64-0.14.0-dev.1911+3bf89f55c.tar.xz -O - | tar -xJ --strip-components=1 -C /usr/local/bin'
-      - name: Setup mingw-w64 g++
-        if: matrix.target == 'x86_64-windows-gnu'
-        run: sudo apt install g++-mingw-w64-x86-64-posix
-      - name: build
-        run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
+  # TEMPORARY (PR #7): only aarch64-windows-msvc (Debug) runs while iterating on it; restore the other targets, ReleaseFast and the x86_64 -Dcpu include before merge.
   msvc:
     # TODO: re-enable required MSVC builds
     continue-on-error: true
     strategy:
       matrix:
         target: [
-          'x86_64-windows-msvc',
           'aarch64-windows-msvc',
         ]
-        optimize: [Debug, ReleaseFast]
-        include:
-          - target: 'x86_64-windows-msvc'
-            cpu: '-Dcpu=x86_64_v2'
+        optimize: [Debug]
     runs-on: windows-2022
     steps:
       - name: Checkout
@@ -66,4 +27,4 @@ jobs:
           7z x zig.zip
           Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.14.0-dev.1911+3bf89f55c\"
       - name: build
-        run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
+        run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} install dxc
