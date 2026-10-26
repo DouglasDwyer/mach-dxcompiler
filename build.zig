@@ -332,6 +332,7 @@ pub fn build(b: *Build) !void {
                         try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
                         // This is probably a bug in the Zig linker.
                     }
+                    try setCrossArchMsvcLibc(b, dxc_exe);
                 }
             }
 
@@ -369,6 +370,7 @@ pub fn build(b: *Build) !void {
     main_tests.linkLibrary(machdxcompiler.lib);
     if (gnu_libstdcxx_gxx) |m| m.linkInto(main_tests);
     if (machdxcompiler.lib_path) |p| main_tests.addLibraryPath(.{ .cwd_relative = p });
+    try setCrossArchMsvcLibc(b, main_tests);
 
     b.installArtifact(main_tests);
     const test_step = b.step("test", "Run library tests");
@@ -402,6 +404,47 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
     b.installArtifact(sharedlib);
     sharedlib.linkLibrary(lib);
     if (gnu_libstdcxx_gxx) |m| m.linkInto(sharedlib);
+}
+
+/// Give `step` an explicit libc description pointing at the target architecture's MSVC/SDK dirs;
+/// without it, Zig links the host architecture's CRT libs and fails with "machine type x64 conflicts with arm64".
+fn setCrossArchMsvcLibc(b: *Build, step: *std.Build.Step.Compile) !void {
+    const target = step.rootModuleTarget();
+    if (builtin.os.tag != .windows or target.os.tag != .windows or target.abi != .msvc) return;
+    if (target.cpu.arch == builtin.cpu.arch) return;
+
+    const arch_dir = switch (target.cpu.arch) {
+        .x86 => "x86",
+        .x86_64 => "x64",
+        .aarch64 => "arm64",
+        else => return,
+    };
+    const msvc = @import("msvc.zig");
+
+    const msvc_lib_dir = try msvc.MsvcLibDir.find(b.allocator);
+    const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir, "..\\.." });
+
+    const sdk = try msvc.ZigWindowsSDK.find(b.allocator);
+    const sdk10 = sdk.windows10sdk orelse return;
+
+    const libc_txt = try std.fmt.allocPrint(b.allocator,
+        \\include_dir={[sdk]s}\Include\{[ver]s}\ucrt
+        \\sys_include_dir={[msvc]s}\include
+        \\crt_dir={[sdk]s}\Lib\{[ver]s}\ucrt\{[arch]s}
+        \\msvc_lib_dir={[msvc]s}\Lib\{[arch]s}
+        \\kernel32_lib_dir={[sdk]s}\Lib\{[ver]s}\um\{[arch]s}
+        \\gcc_dir=
+        \\
+    , .{ .sdk = sdk10.path, .ver = sdk10.version, .msvc = msvc_dir, .arch = arch_dir });
+
+    const write_libc = b.addWriteFiles();
+    const libc_file = write_libc.add(b.fmt("libc-{s}.txt", .{arch_dir}), libc_txt);
+    step.setLibCFile(libc_file);
+    step.step.dependOn(&write_libc.step);
+
+    step.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}\\Lib\\{s}\\um\\{s}", .{ sdk10.path, sdk10.version, arch_dir }) });
+    step.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}\\Lib\\{s}\\ucrt\\{s}", .{ sdk10.path, sdk10.version, arch_dir }) });
+    step.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}\\Lib\\{s}", .{ msvc_dir, arch_dir }) });
 }
 
 /// Links `step`'s C/C++ standard library dependencies. On non-msvc targets `step` compiles
