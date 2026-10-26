@@ -445,6 +445,12 @@ fn setCrossArchMsvcLibc(b: *Build, step: *std.Build.Step.Compile) !void {
     const libc_file = write_libc.add(b.fmt("libc-{s}.txt", .{arch_dir}), libc_txt);
     step.setLibCFile(libc_file);
     step.step.dependOn(&write_libc.step); // setLibCFile doesn't add the dependency itself
+
+    // With an explicit libc file Zig no longer searches these dirs for `-l` system libs
+    // (ole32, oleaut32, version, ...), so add them as library paths as well.
+    step.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}\\Lib\\{s}\\um\\{s}", .{ sdk10.path, sdk10.version, arch_dir }) });
+    step.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}\\Lib\\{s}\\ucrt\\{s}", .{ sdk10.path, sdk10.version, arch_dir }) });
+    step.addLibraryPath(.{ .cwd_relative = try std.fmt.allocPrint(b.allocator, "{s}\\Lib\\{s}", .{ msvc_dir, arch_dir }) });
 }
 
 /// Links `step`'s C/C++ standard library dependencies. On non-msvc targets `step` compiles
